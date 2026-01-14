@@ -13,6 +13,11 @@
   margin-bottom: 12px;
 }
 
+.headerLeft {
+  display: grid;
+  gap: 4px;
+}
+
 .hTitle {
   font-weight: 800;
   letter-spacing: -0.02em;
@@ -22,6 +27,33 @@
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.dirty {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(239, 68, 68, 0.86);
+}
+
+.saveBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(17, 24, 39, 0.70);
+}
+
+.saveBadgeActive {
+  border-color: rgba(245, 158, 11, 0.22);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.16), rgba(255, 255, 255, 0.78));
+  color: rgba(17, 24, 39, 0.82);
 }
 
 .favBtn {

@@ -6,6 +6,7 @@ import TopNav from "./components/TopNav";
 import Sidebar from "./components/Sidebar";
 import NotesList from "./components/NotesList";
 import NoteEditor from "./components/NoteEditor";
+import Toast from "./components/Toast";
 
 // PUBLIC_INTERFACE
 function App() {
@@ -30,6 +31,8 @@ function App() {
             <NoteEditor />
           </div>
         </main>
+
+        <Toast />
       </div>
     </NotesProvider>
   );

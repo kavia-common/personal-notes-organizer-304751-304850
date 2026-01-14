@@ -11,6 +11,9 @@
 const STORAGE_KEY = "ocean_notes_v1";
 const STORAGE_SCHEMA_VERSION = 1;
 
+// Export/import file format version (separate from localStorage wrapper).
+const EXPORT_SCHEMA_VERSION = 1;
+
 /**
  * Stored payload shape:
  * {
@@ -239,6 +242,71 @@ function normalizePersistedState(maybeState) {
     ui,
     selectedNoteId,
   };
+}
+
+/**
+ * Parses and validates import JSON (file contents).
+ * Supports:
+ * - export wrapper: { exportVersion, schemaVersion, state }
+ * - persisted wrapper: { schemaVersion, state }
+ * - direct state: { notes, selectedNoteId, ui }
+ * - array of notes: Note[]
+ */
+function parseImportPayload(text) {
+  const parsed = typeof text === "string" ? safeJsonParse(text) : null;
+  if (!parsed) return { ok: false, error: "Invalid JSON." };
+
+  // Export wrapper
+  if (parsed && typeof parsed === "object" && "state" in parsed && ("exportVersion" in parsed || "schemaVersion" in parsed)) {
+    const exportVersion = Number(parsed.exportVersion ?? EXPORT_SCHEMA_VERSION);
+    const schemaVersion = Number(parsed.schemaVersion ?? 0);
+    if (!Number.isFinite(exportVersion) || exportVersion < 1) {
+      return { ok: false, error: "Unsupported export version." };
+    }
+    return { ok: true, payload: { schemaVersion: Number.isFinite(schemaVersion) ? schemaVersion : 0, state: parsed.state } };
+  }
+
+  // Notes array
+  if (Array.isArray(parsed)) {
+    return { ok: true, payload: { schemaVersion: 0, state: { ...DEFAULT_PERSISTED_STATE, notes: parsed } } };
+  }
+
+  // Direct state object
+  if (parsed && typeof parsed === "object") {
+    return { ok: true, payload: { schemaVersion: 0, state: parsed } };
+  }
+
+  return { ok: false, error: "Unrecognized import format." };
+}
+
+// PUBLIC_INTERFACE
+export function buildExportPayload(state) {
+  /**
+   * Returns a JSON-serializable object for downloading.
+   * Uses exportVersion so we can evolve the file format independent of localStorage wrapper.
+   */
+  const normalizedState = normalizePersistedState(state) || DEFAULT_PERSISTED_STATE;
+  return {
+    exportVersion: EXPORT_SCHEMA_VERSION,
+    schemaVersion: STORAGE_SCHEMA_VERSION,
+    exportedAt: nowIso(),
+    state: normalizedState,
+  };
+}
+
+// PUBLIC_INTERFACE
+export function importStateFromJsonText(jsonText) {
+  /**
+   * Validates and migrates imported JSON text into the current persisted state shape.
+   * Returns { ok: true, state } or { ok: false, error }.
+   */
+  const parsed = parseImportPayload(jsonText);
+  if (!parsed.ok) return parsed;
+
+  const normalizedState = normalizePersistedState(parsed.payload.state);
+  if (!normalizedState) return { ok: false, error: "Import file does not contain a valid notes state." };
+
+  return { ok: true, state: normalizedState };
 }
 
 // PUBLIC_INTERFACE

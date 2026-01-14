@@ -1,5 +1,12 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef } from "react";
-import { buildDemoData, loadFromStorage, saveToStorage, storageAvailable } from "./storage";
+import {
+  buildDemoData,
+  buildExportPayload,
+  importStateFromJsonText,
+  loadFromStorage,
+  saveToStorage,
+  storageAvailable,
+} from "./storage";
 
 /**
  * Formal note schema:
@@ -51,6 +58,23 @@ function makeDeterministicNoteId({ title, category, content, createdAt }) {
 const DEFAULT_STATE = {
   notes: [],
   selectedNoteId: null,
+
+  // Session-only UI state (not persisted to localStorage to avoid schema coupling)
+  uiRuntime: {
+    // Editor autosave state
+    dirty: false,
+    saving: false,
+    lastSavedAt: null,
+    // Toast/snackbar for undo delete, import errors, etc.
+    toast: null, // { id, message, actionLabel?, actionKey? }
+  },
+
+  // Session-only undo/trash for delete UX (in-memory)
+  trash: {
+    // lastDeleted: { note, previousSelectedId, deletedAt }
+    lastDeleted: null,
+  },
+
   ui: {
     category: "All",
     search: "",
@@ -129,6 +153,9 @@ function normalizeState(maybe) {
   return {
     ...DEFAULT_STATE,
     ...maybe,
+    // ensure we never persist runtime-only fields from storage
+    uiRuntime: { ...DEFAULT_STATE.uiRuntime },
+    trash: { ...DEFAULT_STATE.trash },
     notes,
     selectedNoteId,
     ui,
@@ -215,11 +242,46 @@ function ensureValidSelection(state) {
   return { ...state, selectedNoteId: nextSelected };
 }
 
+function createToast(message, actionLabel, actionKey) {
+  return {
+    id: `toast_${Date.now()}_${Math.floor(Math.random() * 10000)}`,
+    message: String(message || ""),
+    actionLabel: actionLabel ? String(actionLabel) : null,
+    actionKey: actionKey ? String(actionKey) : null,
+  };
+}
+
 function reducer(state, action) {
   switch (action.type) {
     case "BOOTSTRAP": {
       return ensureValidSelection(action.payload);
     }
+
+    case "SET_TOAST": {
+      return { ...state, uiRuntime: { ...state.uiRuntime, toast: action.toast } };
+    }
+
+    case "CLEAR_TOAST": {
+      if (!state.uiRuntime.toast) return state;
+      if (action.id && state.uiRuntime.toast.id !== action.id) return state;
+      return { ...state, uiRuntime: { ...state.uiRuntime, toast: null } };
+    }
+
+    case "SET_EDITOR_DIRTY": {
+      return { ...state, uiRuntime: { ...state.uiRuntime, dirty: Boolean(action.value) } };
+    }
+
+    case "SET_EDITOR_SAVING": {
+      return { ...state, uiRuntime: { ...state.uiRuntime, saving: Boolean(action.value) } };
+    }
+
+    case "MARK_EDITOR_SAVED": {
+      return {
+        ...state,
+        uiRuntime: { ...state.uiRuntime, dirty: false, saving: false, lastSavedAt: nowIso() },
+      };
+    }
+
     case "SET_CATEGORY": {
       return ensureValidSelection({ ...state, ui: { ...state.ui, category: action.category } });
     }
@@ -246,11 +308,13 @@ function reducer(state, action) {
         },
       });
     }
+
     case "SELECT_NOTE": {
       // Guard against selecting stale ids.
       const ok = action.id && state.notes.some((n) => n.id === action.id);
       return { ...state, selectedNoteId: ok ? action.id : state.selectedNoteId };
     }
+
     case "CREATE_NOTE": {
       const createdAt = nowIso();
       const base = {
@@ -276,6 +340,7 @@ function reducer(state, action) {
         selectedNoteId: newNote.id,
       };
     }
+
     case "DUPLICATE_NOTE": {
       const source = state.notes.find((n) => n.id === action.id);
       if (!source) return state;
@@ -299,6 +364,7 @@ function reducer(state, action) {
         selectedNoteId: newNote.id,
       };
     }
+
     case "UPDATE_NOTE": {
       const { id, patch } = action;
       const updatedAt = nowIso();
@@ -324,6 +390,7 @@ function reducer(state, action) {
       const next = { ...state, notes: nextNotes };
       return ensureValidSelection(next);
     }
+
     case "RENAME_CATEGORY": {
       const from = normalizeCategoryName(action.from);
       const to = normalizeCategoryName(action.to);
@@ -341,6 +408,7 @@ function reducer(state, action) {
 
       return ensureValidSelection({ ...state, notes: nextNotes, ui: { ...state.ui, category: nextUiCategory } });
     }
+
     case "MERGE_CATEGORIES": {
       const from = normalizeCategoryName(action.from);
       const into = normalizeCategoryName(action.into);
@@ -358,8 +426,12 @@ function reducer(state, action) {
 
       return ensureValidSelection({ ...state, notes: nextNotes, ui: { ...state.ui, category: nextUiCategory } });
     }
+
     case "DELETE_NOTE": {
       const id = action.id;
+
+      const deletedNote = state.notes.find((n) => n.id === id) || null;
+      if (!deletedNote) return state;
 
       // Choose next selection based on current *visible* ordering for better UX:
       // - If deleting selected note: select adjacent (next item), else previous, else clear.
@@ -374,8 +446,47 @@ function reducer(state, action) {
         nextSelected = nextCandidate && remaining.some((n) => n.id === nextCandidate) ? nextCandidate : null;
       }
 
-      return ensureValidSelection({ ...state, notes: remaining, selectedNoteId: nextSelected });
+      const nextState = ensureValidSelection({ ...state, notes: remaining, selectedNoteId: nextSelected });
+
+      // Record in session trash and show undo toast.
+      const toast = createToast(`Deleted “${deletedNote.title || "Untitled"}”.`, "Undo", "UNDO_DELETE");
+      return {
+        ...nextState,
+        trash: { lastDeleted: { note: deletedNote, previousSelectedId: state.selectedNoteId, deletedAt: nowIso() } },
+        uiRuntime: { ...nextState.uiRuntime, toast },
+      };
     }
+
+    case "UNDO_DELETE": {
+      const entry = state.trash.lastDeleted;
+      if (!entry?.note?.id) return state;
+
+      // If note already exists (e.g., imported), don't duplicate.
+      const exists = state.notes.some((n) => n.id === entry.note.id);
+      const nextNotes = exists ? state.notes : [entry.note, ...state.notes];
+
+      return ensureValidSelection({
+        ...state,
+        notes: nextNotes,
+        selectedNoteId: entry.previousSelectedId && nextNotes.some((n) => n.id === entry.previousSelectedId)
+          ? entry.previousSelectedId
+          : state.selectedNoteId,
+        trash: { lastDeleted: null },
+        uiRuntime: { ...state.uiRuntime, toast: null },
+      });
+    }
+
+    case "IMPORT_STATE_REPLACE": {
+      const normalized = normalizeState(action.state) || normalizeState({ ...DEFAULT_STATE, ...buildDemoData() });
+      const next = ensureValidSelection(normalized || DEFAULT_STATE);
+      return {
+        ...next,
+        // reset runtime editor state on import
+        uiRuntime: { ...DEFAULT_STATE.uiRuntime, toast: createToast("Import complete.", null, null) },
+        trash: { ...DEFAULT_STATE.trash },
+      };
+    }
+
     default:
       return state;
   }
@@ -395,17 +506,18 @@ export function NotesProvider({ children }) {
 
     // Seed demo data only when we can access storage and nothing exists yet.
     // If storage is blocked, we still seed demo data for usability, but it won't persist.
-    const initial = saved || normalizeState({ ...DEFAULT_STATE, ...buildDemoData() }) || { ...DEFAULT_STATE, ...buildDemoData() };
+    const initial =
+      saved || normalizeState({ ...DEFAULT_STATE, ...buildDemoData() }) || { ...DEFAULT_STATE, ...buildDemoData() };
 
     dispatch({ type: "BOOTSTRAP", payload: initial });
     bootstrappedRef.current = true;
   }, []);
 
-  // Persist on changes (after bootstrap)
+  // Persist on changes (after bootstrap). We intentionally omit runtime-only parts.
   useEffect(() => {
     if (!bootstrappedRef.current) return;
-    saveToStorage(state);
-  }, [state]);
+    saveToStorage({ notes: state.notes, selectedNoteId: state.selectedNoteId, ui: state.ui });
+  }, [state.notes, state.selectedNoteId, state.ui]);
 
   const derived = useMemo(() => {
     const categories = deriveCategories(state.notes);
@@ -430,8 +542,17 @@ export function NotesProvider({ children }) {
       visibleFavorites,
       noteById,
       visibleNoteIds,
+
+      // Editor/runtime selectors
+      editor: {
+        dirty: Boolean(state.uiRuntime.dirty),
+        saving: Boolean(state.uiRuntime.saving),
+        lastSavedAt: state.uiRuntime.lastSavedAt,
+      },
+      toast: state.uiRuntime.toast,
+      canUndoDelete: Boolean(state.trash.lastDeleted),
     };
-  }, [state.notes, state.selectedNoteId, state.ui]);
+  }, [state.notes, state.selectedNoteId, state.ui, state.uiRuntime, state.trash]);
 
   const actions = useMemo(() => {
     return {
@@ -454,6 +575,11 @@ export function NotesProvider({ children }) {
       deleteNote(id) {
         /** Deletes a note by id. */
         dispatch({ type: "DELETE_NOTE", id });
+      },
+      // PUBLIC_INTERFACE
+      undoDelete() {
+        /** Restores the last deleted note (session-only). */
+        dispatch({ type: "UNDO_DELETE" });
       },
       // PUBLIC_INTERFACE
       selectNote(id) {
@@ -500,8 +626,71 @@ export function NotesProvider({ children }) {
         /** Merges one category into another by reassigning notes. */
         dispatch({ type: "MERGE_CATEGORIES", from, into });
       },
+
+      // PUBLIC_INTERFACE
+      setEditorDirty(value) {
+        /** Marks whether the editor has unsaved changes (session-only). */
+        dispatch({ type: "SET_EDITOR_DIRTY", value });
+      },
+      // PUBLIC_INTERFACE
+      setEditorSaving(value) {
+        /** Marks whether the editor is currently autosaving (session-only). */
+        dispatch({ type: "SET_EDITOR_SAVING", value });
+      },
+      // PUBLIC_INTERFACE
+      markEditorSaved() {
+        /** Marks editor changes as saved (session-only). */
+        dispatch({ type: "MARK_EDITOR_SAVED" });
+      },
+
+      // PUBLIC_INTERFACE
+      showToast(message, actionLabel = null, actionKey = null) {
+        /** Shows a transient toast/snackbar message. */
+        dispatch({ type: "SET_TOAST", toast: createToast(message, actionLabel, actionKey) });
+      },
+      // PUBLIC_INTERFACE
+      clearToast(id = null) {
+        /** Clears the current toast/snackbar message. */
+        dispatch({ type: "CLEAR_TOAST", id });
+      },
+
+      // PUBLIC_INTERFACE
+      exportAllNotes() {
+        /** Exports current notes state to a downloadable JSON file. */
+        const payload = buildExportPayload({ notes: state.notes, selectedNoteId: state.selectedNoteId, ui: state.ui });
+        const json = JSON.stringify(payload, null, 2);
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `ocean-notes-export-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+
+        URL.revokeObjectURL(url);
+        dispatch({ type: "SET_TOAST", toast: createToast("Exported notes JSON.", null, null) });
+      },
+
+      // PUBLIC_INTERFACE
+      async importNotesFromFile(file) {
+        /**
+         * Imports notes from a user-selected JSON file.
+         * Replaces current state (simple, predictable behavior) after validation + migration.
+         */
+        if (!file) return;
+        const text = await file.text();
+        const parsed = importStateFromJsonText(text);
+        if (!parsed.ok) {
+          dispatch({ type: "SET_TOAST", toast: createToast(`Import failed: ${parsed.error}`, null, null) });
+          return;
+        }
+        dispatch({ type: "IMPORT_STATE_REPLACE", state: parsed.state });
+      },
     };
-  }, []);
+    // We intentionally depend on state pieces used in export and toast actions.
+  }, [state.notes, state.selectedNoteId, state.ui]);
 
   const value = useMemo(() => ({ state, derived, actions }), [state, derived, actions]);
 

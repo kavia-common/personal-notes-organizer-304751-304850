@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useRef } from "react";
 import styles from "./TopNav.module.css";
 import { useNotes } from "../store/NotesStore";
 import { getApiBaseUrl } from "../api/client";
@@ -14,6 +14,8 @@ export default function TopNav() {
     const visible = derived.visibleNotes.length;
     return { total, visible };
   }, [state.notes.length, derived.visibleNotes.length]);
+
+  const importRef = useRef(null);
 
   return (
     <div className={styles.wrap} role="banner" aria-label="Top navigation">
@@ -41,6 +43,7 @@ export default function TopNav() {
             className={`ocean-btn ${styles.newBtn}`}
             onClick={() => actions.createNote({ title: "Untitled", category: "General", content: "" })}
             aria-label="Create a new note"
+            type="button"
           >
             <span className={styles.plus} aria-hidden="true">
               +
@@ -58,6 +61,40 @@ export default function TopNav() {
           >
             Duplicate
           </button>
+
+          <button
+            className={`ocean-btn ${styles.ioBtn}`}
+            type="button"
+            onClick={() => actions.exportAllNotes()}
+            aria-label="Export notes to JSON"
+            title="Export JSON"
+          >
+            Export
+          </button>
+
+          <button
+            className={`ocean-btn ${styles.ioBtn}`}
+            type="button"
+            onClick={() => importRef.current?.click()}
+            aria-label="Import notes from JSON"
+            title="Import JSON"
+          >
+            Import
+          </button>
+
+          <input
+            ref={importRef}
+            className={styles.fileInput}
+            type="file"
+            accept="application/json,.json"
+            aria-label="Choose JSON file to import notes"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) actions.importNotesFromFile(file);
+              // allow re-importing same file
+              e.target.value = "";
+            }}
+          />
 
           <div className={styles.hint} aria-label="Keyboard shortcut hint">
             <span className="ocean-muted">Tip:</span> <span className="ocean-kbd">Ctrl</span>+

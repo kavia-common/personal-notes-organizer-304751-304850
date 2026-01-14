@@ -72,6 +72,26 @@
   cursor: not-allowed;
 }
 
+.ioBtn {
+  border-color: rgba(17, 24, 39, 0.12);
+  background: rgba(255, 255, 255, 0.75);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 10px 10px;
+}
+
+.fileInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .plus {
   font-size: 16px;
   line-height: 1;
