@@ -16,6 +16,25 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function safeStorageGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    // localStorage can throw in private mode, blocked cookies, or storage access denied scenarios.
+    return null;
+  }
+}
+
+function safeStorageSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+    return true;
+  } catch {
+    // Quota exceeded / storage blocked. We intentionally fail silently to keep the app usable.
+    return false;
+  }
+}
+
 // PUBLIC_INTERFACE
 export function buildDemoData() {
   /** Returns initial demo notes and categories. */
@@ -58,7 +77,7 @@ export function buildDemoData() {
 export function loadFromStorage() {
   /** Loads notes state from localStorage; returns null if missing/unreadable. */
   if (typeof window === "undefined") return null;
-  const raw = window.localStorage.getItem(STORAGE_KEY);
+  const raw = safeStorageGet(STORAGE_KEY);
   if (!raw) return null;
   return safeJsonParse(raw);
 }
@@ -66,6 +85,13 @@ export function loadFromStorage() {
 // PUBLIC_INTERFACE
 export function saveToStorage(state) {
   /** Persists notes state to localStorage. */
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  if (typeof window === "undefined") return false;
+  return safeStorageSet(STORAGE_KEY, JSON.stringify(state));
+}
+
+// PUBLIC_INTERFACE
+export function storageAvailable() {
+  /** Returns true if localStorage is accessible and writable. */
+  if (typeof window === "undefined") return false;
+  return safeStorageSet("__ocean_notes_probe__", "1");
 }

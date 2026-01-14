@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useEffect, useMemo, useReducer } from "react";
-import { buildDemoData, loadFromStorage, saveToStorage } from "./storage";
+import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef } from "react";
+import { buildDemoData, loadFromStorage, saveToStorage, storageAvailable } from "./storage";
 
 function nowIso() {
   return new Date().toISOString();
@@ -65,22 +65,43 @@ function sortNotes(notes, sortKey) {
   }
 }
 
+function computeVisibleNotes(state) {
+  const filtered = state.notes.filter((n) => {
+    const catOk = state.ui.category === "All" ? true : n.category === state.ui.category;
+    const qOk = matchSearch(n, state.ui.search);
+    return catOk && qOk;
+  });
+  return sortNotes(filtered, state.ui.sort);
+}
+
+function ensureValidSelection(state) {
+  // Keep selection stable and always valid if there are notes remaining.
+  const hasSelected = state.selectedNoteId && state.notes.some((n) => n.id === state.selectedNoteId);
+  if (hasSelected) return state;
+
+  const visible = computeVisibleNotes(state);
+  const nextSelected = visible[0]?.id ?? state.notes[0]?.id ?? null;
+  return { ...state, selectedNoteId: nextSelected };
+}
+
 function reducer(state, action) {
   switch (action.type) {
     case "BOOTSTRAP": {
-      return action.payload;
+      return ensureValidSelection(action.payload);
     }
     case "SET_CATEGORY": {
-      return { ...state, ui: { ...state.ui, category: action.category } };
+      return ensureValidSelection({ ...state, ui: { ...state.ui, category: action.category } });
     }
     case "SET_SEARCH": {
-      return { ...state, ui: { ...state.ui, search: action.search } };
+      return ensureValidSelection({ ...state, ui: { ...state.ui, search: action.search } });
     }
     case "SET_SORT": {
-      return { ...state, ui: { ...state.ui, sort: action.sort } };
+      return ensureValidSelection({ ...state, ui: { ...state.ui, sort: action.sort } });
     }
     case "SELECT_NOTE": {
-      return { ...state, selectedNoteId: action.id };
+      // Guard against selecting stale ids.
+      const ok = action.id && state.notes.some((n) => n.id === action.id);
+      return { ...state, selectedNoteId: ok ? action.id : state.selectedNoteId };
     }
     case "CREATE_NOTE": {
       const createdAt = nowIso();
@@ -93,6 +114,7 @@ function reducer(state, action) {
         createdAt,
         updatedAt: createdAt,
       };
+      // If current filters hide the newly created note (e.g., category != General), we still select it.
       return {
         ...state,
         notes: [newNote, ...state.notes],
@@ -102,16 +124,29 @@ function reducer(state, action) {
     case "UPDATE_NOTE": {
       const { id, patch } = action;
       const updatedAt = nowIso();
-      return {
+      const next = {
         ...state,
         notes: state.notes.map((n) => (n.id === id ? { ...n, ...patch, updatedAt } : n)),
       };
+      return ensureValidSelection(next);
     }
     case "DELETE_NOTE": {
       const id = action.id;
+
+      // Choose next selection based on current *visible* ordering for better UX:
+      // - If deleting selected note: select adjacent (next item), else previous, else clear.
+      const visibleBefore = computeVisibleNotes(state);
+      const idx = visibleBefore.findIndex((n) => n.id === id);
+
       const remaining = state.notes.filter((n) => n.id !== id);
-      const nextSelected = state.selectedNoteId === id ? (remaining[0]?.id ?? null) : state.selectedNoteId;
-      return { ...state, notes: remaining, selectedNoteId: nextSelected };
+
+      let nextSelected = state.selectedNoteId;
+      if (state.selectedNoteId === id) {
+        const nextCandidate = visibleBefore[idx + 1]?.id ?? visibleBefore[idx - 1]?.id ?? null;
+        nextSelected = nextCandidate && remaining.some((n) => n.id === nextCandidate) ? nextCandidate : null;
+      }
+
+      return ensureValidSelection({ ...state, notes: remaining, selectedNoteId: nextSelected });
     }
     default:
       return state;
@@ -124,31 +159,31 @@ const NotesContext = createContext(null);
 export function NotesProvider({ children }) {
   /** Provider for notes state, actions, and derived views. */
   const [state, dispatch] = useReducer(reducer, DEFAULT_STATE);
+  const bootstrappedRef = useRef(false);
 
   useEffect(() => {
-    const saved = normalizeState(loadFromStorage());
+    const canUseStorage = storageAvailable();
+    const saved = canUseStorage ? normalizeState(loadFromStorage()) : null;
+
+    // Seed demo data only when we can access storage and nothing exists yet.
+    // If storage is blocked, we still seed demo data for usability, but it won't persist.
     const initial = saved || { ...DEFAULT_STATE, ...buildDemoData() };
-    const selected = initial.selectedNoteId || (initial.notes[0]?.id ?? null);
-    dispatch({ type: "BOOTSTRAP", payload: { ...initial, selectedNoteId: selected } });
+    dispatch({ type: "BOOTSTRAP", payload: initial });
+    bootstrappedRef.current = true;
   }, []);
 
   // Persist on changes (after bootstrap)
   useEffect(() => {
-    if (!state.notes.length && !state.selectedNoteId) return;
+    if (!bootstrappedRef.current) return;
     saveToStorage(state);
   }, [state]);
 
   const derived = useMemo(() => {
     const categories = deriveCategories(state.notes);
-    const filtered = state.notes.filter((n) => {
-      const catOk = state.ui.category === "All" ? true : n.category === state.ui.category;
-      const qOk = matchSearch(n, state.ui.search);
-      return catOk && qOk;
-    });
-    const sorted = sortNotes(filtered, state.ui.sort);
+    const visibleNotes = computeVisibleNotes(state);
     const selectedNote = state.notes.find((n) => n.id === state.selectedNoteId) || null;
 
-    return { categories, visibleNotes: sorted, selectedNote };
+    return { categories, visibleNotes, selectedNote };
   }, [state.notes, state.selectedNoteId, state.ui]);
 
   const actions = useMemo(() => {
