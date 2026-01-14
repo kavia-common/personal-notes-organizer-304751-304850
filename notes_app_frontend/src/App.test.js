@@ -1,8 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import App from "./App";
 
-test("renders Ocean Notes header", () => {
+test("renders top navigation with the Ocean Notes title", () => {
   render(<App />);
-  const title = screen.getByText(/Ocean Notes/i);
-  expect(title).toBeInTheDocument();
+  // Use role+name to avoid matching demo note content that also contains "Ocean Notes"
+  expect(screen.getByRole("banner", { name: /top navigation/i })).toBeInTheDocument();
+  expect(screen.getByRole("banner", { name: /top navigation/i })).toHaveTextContent(/Ocean Notes/i);
 });
