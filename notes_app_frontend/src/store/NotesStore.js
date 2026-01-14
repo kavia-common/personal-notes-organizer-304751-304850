@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef } from "react";
+import { getApiBaseUrl } from "../api/client";
+import { SyncService } from "../api/sync";
 import {
   buildDemoData,
   buildExportPayload,
@@ -578,6 +580,15 @@ export function NotesProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, DEFAULT_STATE);
   const bootstrappedRef = useRef(false);
 
+  // Optional sync layer (offline-first): only tries network when API base env var is set.
+  const syncRef = useRef(null);
+  if (!syncRef.current) {
+    syncRef.current = new SyncService({
+      // Only show a non-blocking toast if the UI store is already capable of showing one.
+      onNonBlockingError: (msg) => dispatch({ type: "SET_TOAST", toast: createToast(String(msg), null, null) }),
+    });
+  }
+
   // Selector cache is per-provider instance to ensure stable references.
   const selectorsRef = useRef(null);
   if (!selectorsRef.current) selectorsRef.current = createNotesSelectors();
@@ -587,16 +598,39 @@ export function NotesProvider({ children }) {
   const lastPersistedRef = useRef({ notes: [], selectedNoteId: null, ui: null });
 
   useEffect(() => {
-    const canUseStorage = storageAvailable();
-    const saved = canUseStorage ? normalizeState(loadFromStorage()) : null;
+    let cancelled = false;
 
-    // Seed demo data only when we can access storage and nothing exists yet.
-    // If storage is blocked, we still seed demo data for usability, but it won't persist.
-    const initial =
-      saved || normalizeState({ ...DEFAULT_STATE, ...buildDemoData() }) || { ...DEFAULT_STATE, ...buildDemoData() };
+    async function bootstrap() {
+      const canUseStorage = storageAvailable();
+      const saved = canUseStorage ? normalizeState(loadFromStorage()) : null;
 
-    dispatch({ type: "BOOTSTRAP", payload: initial });
-    bootstrappedRef.current = true;
+      // Start from local (or demo) immediately; then best-effort refresh notes from API if enabled.
+      const initialLocal =
+        saved || normalizeState({ ...DEFAULT_STATE, ...buildDemoData() }) || { ...DEFAULT_STATE, ...buildDemoData() };
+
+      let initial = initialLocal;
+
+      // Optional API refresh: never blocks bootstrap if disabled or fails.
+      if (getApiBaseUrl()) {
+        try {
+          const apiNotes = await syncRef.current.listNotes();
+          if (!cancelled && Array.isArray(apiNotes)) {
+            initial = normalizeState({ ...initialLocal, notes: apiNotes }) || initialLocal;
+          }
+        } catch {
+          // SyncService already handles fallback + optional toast.
+        }
+      }
+
+      if (cancelled) return;
+      dispatch({ type: "BOOTSTRAP", payload: initial });
+      bootstrappedRef.current = true;
+    }
+
+    bootstrap();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Persist on changes (after bootstrap). We intentionally omit runtime-only parts.
@@ -615,9 +649,15 @@ export function NotesProvider({ children }) {
     // Debounce writes; last action wins.
     if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
     persistTimerRef.current = window.setTimeout(() => {
+      // Always persist locally (offline-first). SyncService will no-op unless API is enabled.
       saveToStorage(nextPayload);
       lastPersistedRef.current = nextPayload;
       persistTimerRef.current = null;
+
+      // Best-effort background sync: do not block UI and do not throw.
+      if (getApiBaseUrl()) {
+        syncRef.current.exportAll().catch(() => {});
+      }
     }, 500);
 
     return () => {
@@ -669,26 +709,39 @@ export function NotesProvider({ children }) {
       createNote(note) {
         /** Creates a new note and selects it. */
         dispatch({ type: "CREATE_NOTE", note });
+
+        // Best-effort sync (offline-first): don't block UI.
+        const apiEnabled = Boolean(getApiBaseUrl());
+        if (apiEnabled) {
+          const snapshot = normalizeNoteForRuntime(note);
+          // If caller passed partial note, the reducer will normalize; we only sync if it has an id.
+          if (snapshot?.id) syncRef.current.createNote(snapshot).catch(() => {});
+        }
       },
       // PUBLIC_INTERFACE
       duplicateNote(id) {
         /** Duplicates a note by id and selects the new copy. */
         dispatch({ type: "DUPLICATE_NOTE", id });
+        // Persist effect will handle local save and best-effort sync.
       },
       // PUBLIC_INTERFACE
       updateNote(id, patch) {
         /** Updates a note by id. */
         dispatch({ type: "UPDATE_NOTE", id, patch });
+        if (getApiBaseUrl()) syncRef.current.updateNote(id, patch).catch(() => {});
       },
       // PUBLIC_INTERFACE
       deleteNote(id) {
         /** Deletes a note by id. */
         dispatch({ type: "DELETE_NOTE", id });
+        if (getApiBaseUrl()) syncRef.current.deleteNote(id).catch(() => {});
       },
       // PUBLIC_INTERFACE
       undoDelete() {
         /** Restores the last deleted note (session-only). */
         dispatch({ type: "UNDO_DELETE" });
+        // Note: no automatic "undelete" endpoint assumed; persistence + exportAll is best-effort.
+        if (getApiBaseUrl()) syncRef.current.exportAll().catch(() => {});
       },
       // PUBLIC_INTERFACE
       selectNote(id) {
@@ -729,11 +782,13 @@ export function NotesProvider({ children }) {
       renameCategory(from, to) {
         /** Renames a category, updating all notes that use it. */
         dispatch({ type: "RENAME_CATEGORY", from, to });
+        if (getApiBaseUrl()) syncRef.current.exportAll().catch(() => {});
       },
       // PUBLIC_INTERFACE
       mergeCategories(from, into) {
         /** Merges one category into another by reassigning notes. */
         dispatch({ type: "MERGE_CATEGORIES", from, into });
+        if (getApiBaseUrl()) syncRef.current.exportAll().catch(() => {});
       },
 
       // PUBLIC_INTERFACE
@@ -780,6 +835,9 @@ export function NotesProvider({ children }) {
 
         URL.revokeObjectURL(url);
         dispatch({ type: "SET_TOAST", toast: createToast("Exported notes JSON.", null, null) });
+
+        // Best-effort export sync (no-op if API disabled).
+        if (getApiBaseUrl()) syncRef.current.exportAll().catch(() => {});
       },
 
       // PUBLIC_INTERFACE
@@ -796,6 +854,9 @@ export function NotesProvider({ children }) {
           return;
         }
         dispatch({ type: "IMPORT_STATE_REPLACE", state: parsed.state });
+
+        // Best-effort: push imported state to backend if enabled; does not affect UI behavior.
+        if (getApiBaseUrl()) syncRef.current.importAll(parsed.state).catch(() => {});
       },
     };
     // We intentionally depend on state pieces used in export and toast actions.
