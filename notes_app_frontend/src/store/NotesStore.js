@@ -9,6 +9,84 @@ import {
 } from "./storage";
 
 /**
+ * Performance notes:
+ * - Filtering/sorting can be expensive for large note sets.
+ * - Persistence writes to localStorage are also expensive and can block the main thread.
+ * This file introduces:
+ *   1) memoized selectors with narrow dependency keys (so unrelated state changes don't recompute lists)
+ *   2) debounced persistence writes (and no writes during initial bootstrap)
+ */
+
+function shallowEqualArray(a, b) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function buildNotesSignature(notes) {
+  // O(n) signature; still cheaper than repeated filter+sort+map chains on unrelated renders,
+  // and stable so we can skip recompute when only runtime UI changed.
+  // Includes fields used by list filtering and sorting.
+  let out = "";
+  for (let i = 0; i < notes.length; i += 1) {
+    const n = notes[i];
+    out += `${n.id}|${n.updatedAt}|${n.title}|${n.category}|${n.isFavorite ? 1 : 0}|`;
+  }
+  return out;
+}
+
+// PUBLIC_INTERFACE
+function createNotesSelectors() {
+  /** Creates memoized selector helpers scoped to a store instance. */
+  let lastCategoriesSig = null;
+  let lastCategories = [];
+
+  let lastVisibleKey = null;
+  let lastVisibleNotes = [];
+  let lastVisibleIds = [];
+
+  return {
+    // PUBLIC_INTERFACE
+    getCategories(notes) {
+      /** Returns stable categories array when notes category set hasn't changed. */
+      const sig = `${notes.length}|` + notes.map((n) => `${n.category || ""}`).join("|");
+      if (sig === lastCategoriesSig) return lastCategories;
+      lastCategoriesSig = sig;
+      lastCategories = deriveCategories(notes);
+      return lastCategories;
+    },
+
+    // PUBLIC_INTERFACE
+    getVisibleNotes(state) {
+      /** Returns stable visible notes array when notes/ui inputs haven't changed. */
+      const notesSig = buildNotesSignature(state.notes);
+      const ui = state.ui;
+      const key = `${notesSig}::${ui.category}::${ui.search}::${ui.favoritesOnly ? 1 : 0}::${ui.favoritesFirst ? 1 : 0}::${
+        ui.sort
+      }`;
+
+      if (key === lastVisibleKey) return lastVisibleNotes;
+
+      lastVisibleKey = key;
+      lastVisibleNotes = computeVisibleNotes(state);
+      lastVisibleIds = lastVisibleNotes.map((n) => n.id);
+      return lastVisibleNotes;
+    },
+
+    // PUBLIC_INTERFACE
+    getVisibleNoteIds(state) {
+      /** Returns stable visible note IDs array when visible notes are unchanged. */
+      // Ensure visible notes cache is up to date.
+      this.getVisibleNotes(state);
+      return lastVisibleIds;
+    },
+  };
+}
+
+/**
  * Formal note schema:
  * {
  *   id: string,
@@ -500,6 +578,14 @@ export function NotesProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, DEFAULT_STATE);
   const bootstrappedRef = useRef(false);
 
+  // Selector cache is per-provider instance to ensure stable references.
+  const selectorsRef = useRef(null);
+  if (!selectorsRef.current) selectorsRef.current = createNotesSelectors();
+
+  // Debounced persistence (avoid expensive localStorage writes on every keystroke)
+  const persistTimerRef = useRef(null);
+  const lastPersistedRef = useRef({ notes: [], selectedNoteId: null, ui: null });
+
   useEffect(() => {
     const canUseStorage = storageAvailable();
     const saved = canUseStorage ? normalizeState(loadFromStorage()) : null;
@@ -516,12 +602,35 @@ export function NotesProvider({ children }) {
   // Persist on changes (after bootstrap). We intentionally omit runtime-only parts.
   useEffect(() => {
     if (!bootstrappedRef.current) return;
-    saveToStorage({ notes: state.notes, selectedNoteId: state.selectedNoteId, ui: state.ui });
+
+    const nextPayload = { notes: state.notes, selectedNoteId: state.selectedNoteId, ui: state.ui };
+
+    // Avoid writing if nothing materially changed (helps when runtime UI updates happen).
+    const last = lastPersistedRef.current;
+    const sameNotes = last.notes === nextPayload.notes || shallowEqualArray(last.notes, nextPayload.notes);
+    const sameSelected = last.selectedNoteId === nextPayload.selectedNoteId;
+    const sameUi = last.ui === nextPayload.ui;
+    if (sameNotes && sameSelected && sameUi) return;
+
+    // Debounce writes; last action wins.
+    if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
+    persistTimerRef.current = window.setTimeout(() => {
+      saveToStorage(nextPayload);
+      lastPersistedRef.current = nextPayload;
+      persistTimerRef.current = null;
+    }, 500);
+
+    return () => {
+      if (persistTimerRef.current) window.clearTimeout(persistTimerRef.current);
+    };
   }, [state.notes, state.selectedNoteId, state.ui]);
 
   const derived = useMemo(() => {
-    const categories = deriveCategories(state.notes);
-    const visibleNotes = computeVisibleNotes(state);
+    const selectors = selectorsRef.current;
+
+    const categories = selectors.getCategories(state.notes);
+    const visibleNotes = selectors.getVisibleNotes(state);
+    const visibleNoteIds = selectors.getVisibleNoteIds(state);
     const selectedNote = state.notes.find((n) => n.id === state.selectedNoteId) || null;
 
     // Derived selectors for reuse by components (no component prop changes required).
@@ -530,14 +639,12 @@ export function NotesProvider({ children }) {
     const visibleFavorites = visibleNotes.filter((n) => favoriteIds.has(n.id));
 
     const noteById = new Map(state.notes.map((n) => [n.id, n]));
-    const visibleNoteIds = visibleNotes.map((n) => n.id);
 
     return {
       categories,
       visibleNotes,
       selectedNote,
 
-      // New derived selectors (safe additions; existing UI continues using visibleNotes/selectedNote/categories)
       favorites,
       visibleFavorites,
       noteById,
@@ -552,6 +659,8 @@ export function NotesProvider({ children }) {
       toast: state.uiRuntime.toast,
       canUndoDelete: Boolean(state.trash.lastDeleted),
     };
+    // NOTE: state.uiRuntime and state.trash are included because derived exposes editor/toast/canUndoDelete,
+    // but visible lists are memoized to the notes/ui signature so they won't churn on runtime-only changes.
   }, [state.notes, state.selectedNoteId, state.ui, state.uiRuntime, state.trash]);
 
   const actions = useMemo(() => {

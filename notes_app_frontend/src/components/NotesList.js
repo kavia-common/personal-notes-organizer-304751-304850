@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef } from "react";
 import styles from "./NotesList.module.css";
 import { useNotes } from "../store/NotesStore";
 
@@ -14,6 +14,49 @@ function formatDate(iso) {
 function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n));
 }
+
+const NoteRow = React.memo(function NoteRow({ note, active, onSelect, onDuplicate }) {
+  return (
+    <div className={styles.rowWrap}>
+      <button
+        id={`note-option-${note.id}`}
+        type="button"
+        role="option"
+        aria-selected={active}
+        className={`${styles.item} ${active ? styles.active : ""}`}
+        onClick={onSelect}
+        aria-label={`Open note ${note.title || "Untitled"}`}
+      >
+        <div className={styles.itemTop}>
+          <div className={styles.itemTitle}>{note.title || "Untitled"}</div>
+          <div className={styles.date}>{formatDate(note.updatedAt)}</div>
+        </div>
+        <div className={styles.meta}>
+          <span className={styles.badge}>{note.category || "General"}</span>
+          {note.isFavorite ? (
+            <span className={styles.star} aria-label="Favorite">
+              ★
+            </span>
+          ) : (
+            <span aria-hidden="true" />
+          )}
+        </div>
+      </button>
+
+      <div className={styles.quick} aria-label="Quick actions">
+        <button
+          type="button"
+          className={styles.quickBtn}
+          onClick={onDuplicate}
+          aria-label={`Duplicate note ${note.title || "Untitled"}`}
+          title="Duplicate"
+        >
+          Duplicate
+        </button>
+      </div>
+    </div>
+  );
+});
 
 // PUBLIC_INTERFACE
 export default function NotesList() {
@@ -42,54 +85,71 @@ export default function NotesList() {
     }
   }, [selectedId]);
 
-  const onListKeyDown = (e) => {
-    const ids = derived.visibleNoteIds || derived.visibleNotes.map((n) => n.id);
-    if (!ids.length) return;
+  const visibleNotes = derived.visibleNotes;
+  const visibleIds = derived.visibleNoteIds || visibleNotes.map((n) => n.id);
 
-    const currentIndex = selectedId ? ids.indexOf(selectedId) : -1;
+  const onSelectId = useCallback(
+    (id) => {
+      actions.selectNote(id);
+    },
+    [actions]
+  );
 
-    const moveToIndex = (nextIndex) => {
-      const idx = clamp(nextIndex, 0, ids.length - 1);
-      const nextId = ids[idx];
-      if (nextId) actions.selectNote(nextId);
-    };
+  const onDuplicateId = useCallback(
+    (id) => {
+      actions.duplicateNote(id);
+    },
+    [actions]
+  );
 
-    switch (e.key) {
-      case "ArrowDown":
-      case "Down": {
-        e.preventDefault();
-        moveToIndex((currentIndex < 0 ? 0 : currentIndex) + 1);
-        break;
-      }
-      case "ArrowUp":
-      case "Up": {
-        e.preventDefault();
-        moveToIndex((currentIndex < 0 ? ids.length - 1 : currentIndex) - 1);
-        break;
-      }
-      case "Home": {
-        e.preventDefault();
-        moveToIndex(0);
-        break;
-      }
-      case "End": {
-        e.preventDefault();
-        moveToIndex(ids.length - 1);
-        break;
-      }
-      case "Enter": {
-        // Selection already means "open"; keep default button behavior elsewhere.
-        // Here, just ensure an item is selected.
-        if (!selectedId) {
+  const onListKeyDown = useCallback(
+    (e) => {
+      if (!visibleIds.length) return;
+
+      const currentIndex = selectedId ? visibleIds.indexOf(selectedId) : -1;
+
+      const moveToIndex = (nextIndex) => {
+        const idx = clamp(nextIndex, 0, visibleIds.length - 1);
+        const nextId = visibleIds[idx];
+        if (nextId) onSelectId(nextId);
+      };
+
+      switch (e.key) {
+        case "ArrowDown":
+        case "Down": {
+          e.preventDefault();
+          moveToIndex((currentIndex < 0 ? 0 : currentIndex) + 1);
+          break;
+        }
+        case "ArrowUp":
+        case "Up": {
+          e.preventDefault();
+          moveToIndex((currentIndex < 0 ? visibleIds.length - 1 : currentIndex) - 1);
+          break;
+        }
+        case "Home": {
           e.preventDefault();
           moveToIndex(0);
+          break;
         }
-        break;
+        case "End": {
+          e.preventDefault();
+          moveToIndex(visibleIds.length - 1);
+          break;
+        }
+        case "Enter": {
+          if (!selectedId) {
+            e.preventDefault();
+            moveToIndex(0);
+          }
+          break;
+        }
+        default:
+          break;
       }
-      default:
-        break;
-    }
-  };
+    },
+    [visibleIds, selectedId, onSelectId]
+  );
 
   return (
     <section className={`${styles.card} ocean-surface`} aria-label="Notes list">
@@ -97,7 +157,7 @@ export default function NotesList() {
         <div>
           <div className={styles.hTitle}>Notes</div>
           <div className="ocean-muted" style={{ fontSize: 12 }}>
-            {derived.visibleNotes.length} visible
+            {visibleNotes.length} visible
             {state.ui.favoritesOnly ? " • favorites" : ""}
           </div>
         </div>
@@ -142,56 +202,26 @@ export default function NotesList() {
         tabIndex={0}
         onKeyDown={onListKeyDown}
       >
-        {derived.visibleNotes.length === 0 ? (
+        {visibleNotes.length === 0 ? (
           <div className={styles.empty} role="status" aria-live="polite">
             <div className={styles.emptyTitle}>No notes match your filters.</div>
             <div className="ocean-muted">Try clearing filters or selecting “All”.</div>
           </div>
         ) : (
-          derived.visibleNotes.map((n) => {
+          // Render memoized row components. Each row re-renders only when its note or active flag changes.
+          visibleNotes.map((n) => {
             const active = n.id === selectedId;
             return (
-              <div key={n.id} className={styles.rowWrap}>
-                <button
-                  id={`note-option-${n.id}`}
-                  type="button"
-                  role="option"
-                  aria-selected={active}
-                  className={`${styles.item} ${active ? styles.active : ""}`}
-                  onClick={() => actions.selectNote(n.id)}
-                  aria-label={`Open note ${n.title || "Untitled"}`}
-                >
-                  <div className={styles.itemTop}>
-                    <div className={styles.itemTitle}>{n.title || "Untitled"}</div>
-                    <div className={styles.date}>{formatDate(n.updatedAt)}</div>
-                  </div>
-                  <div className={styles.meta}>
-                    <span className={styles.badge}>{n.category || "General"}</span>
-                    {n.isFavorite ? (
-                      <span className={styles.star} aria-label="Favorite">
-                        ★
-                      </span>
-                    ) : (
-                      <span aria-hidden="true" />
-                    )}
-                  </div>
-                </button>
-
-                <div className={styles.quick} aria-label="Quick actions">
-                  <button
-                    type="button"
-                    className={styles.quickBtn}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      actions.duplicateNote(n.id);
-                    }}
-                    aria-label={`Duplicate note ${n.title || "Untitled"}`}
-                    title="Duplicate"
-                  >
-                    Duplicate
-                  </button>
-                </div>
-              </div>
+              <NoteRow
+                key={n.id}
+                note={n}
+                active={active}
+                onSelect={() => onSelectId(n.id)}
+                onDuplicate={(e) => {
+                  e.stopPropagation();
+                  onDuplicateId(n.id);
+                }}
+              />
             );
           })
         )}
