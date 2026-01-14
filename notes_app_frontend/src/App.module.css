@@ -13,6 +13,21 @@
   border-bottom: 1px solid rgba(17, 24, 39, 0.08);
 }
 
+.mobileControls {
+  width: min(1200px, calc(100% - 32px));
+  margin: 12px auto 0 auto;
+  display: none;
+}
+
+.sidebarToggle {
+  width: 100%;
+  justify-content: center;
+  font-weight: 900;
+  min-height: 44px; /* touch target */
+  background: rgba(255, 255, 255, 0.85);
+  border-color: rgba(37, 99, 235, 0.16);
+}
+
 .body {
   flex: 1;
   width: min(1200px, calc(100% - 32px));
@@ -26,6 +41,16 @@
 .panel {
   border-radius: var(--radius-lg);
   overflow: hidden;
+}
+
+.sidebarBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.36);
+  border: none;
+  padding: 0;
+  margin: 0;
+  z-index: 19;
 }
 
 @media (max-width: 1024px) {
@@ -47,11 +72,30 @@
 }
 
 @media (max-width: 820px) {
+  .mobileControls {
+    display: block;
+  }
+
   .body {
     grid-template-columns: 1fr;
     grid-template-areas:
-      "sidebar"
       "list"
       "editor";
+    margin-top: 12px;
+  }
+
+  .sidebar {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    top: 96px;
+    bottom: 16px;
+    z-index: 20;
+    display: none; /* closed by default */
+    overflow: auto;
+  }
+
+  .sidebarOpenMobile {
+    display: block;
   }
 }

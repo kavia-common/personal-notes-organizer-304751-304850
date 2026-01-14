@@ -12,10 +12,14 @@ function canManageCategory(name) {
 }
 
 // PUBLIC_INTERFACE
-export default function Sidebar() {
+export default function Sidebar({ onRequestCloseMobile = null }) {
   /** Sidebar with search input and category/favorites filters + minimal category management. */
   const { state, derived, actions } = useNotes();
   const searchRef = useRef(null);
+
+  const lastFocusRef = useRef(null);
+  const renameToRef = useRef(null);
+  const mergeFromRef = useRef(null);
 
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameFrom, setRenameFrom] = useState("");
@@ -36,6 +40,35 @@ export default function Sidebar() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // Manage focus when opening "dialog-like" panels (rename/merge).
+  useEffect(() => {
+    if (!renameOpen) return;
+    window.setTimeout(() => renameToRef.current?.focus(), 0);
+  }, [renameOpen]);
+
+  useEffect(() => {
+    if (!mergeOpen) return;
+    window.setTimeout(() => mergeFromRef.current?.focus(), 0);
+  }, [mergeOpen]);
+
+  // Global escape: close rename/merge panels first (acts like cancel).
+  useEffect(() => {
+    const anyOpen = renameOpen || mergeOpen;
+    if (!anyOpen) return undefined;
+
+    const onKeyDown = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      if (renameOpen) setRenameOpen(false);
+      if (mergeOpen) setMergeOpen(false);
+      // Return focus to whatever triggered the panel (best-effort).
+      window.setTimeout(() => lastFocusRef.current?.focus?.(), 0);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [renameOpen, mergeOpen]);
 
   const items = useMemo(() => {
     return ["All", ...derived.categories];
@@ -60,6 +93,7 @@ export default function Sidebar() {
     setRenameOpen(false);
     setRenameFrom("");
     setRenameTo("");
+    window.setTimeout(() => lastFocusRef.current?.focus?.(), 0);
   };
 
   const onSubmitMerge = (e) => {
@@ -71,6 +105,11 @@ export default function Sidebar() {
     setMergeOpen(false);
     setMergeFrom("");
     setMergeInto("");
+    window.setTimeout(() => lastFocusRef.current?.focus?.(), 0);
+  };
+
+  const closeMobileIfRequested = () => {
+    if (typeof onRequestCloseMobile === "function") onRequestCloseMobile();
   };
 
   return (
@@ -163,7 +202,10 @@ export default function Sidebar() {
                 type="button"
                 role="listitem"
                 className={`${styles.catItem} ${active ? styles.active : ""}`}
-                onClick={() => actions.setCategory(c)}
+                onClick={() => {
+                  actions.setCategory(c);
+                  closeMobileIfRequested();
+                }}
                 aria-pressed={active}
                 aria-label={`Filter by category ${c}`}
               >
@@ -178,7 +220,8 @@ export default function Sidebar() {
           <button
             type="button"
             className={styles.manageBtn}
-            onClick={() => {
+            onClick={(e) => {
+              lastFocusRef.current = e.currentTarget;
               setMergeOpen(false);
               setRenameOpen((v) => !v);
               setRenameFrom(state.ui.category !== "All" ? state.ui.category : "");
@@ -194,7 +237,8 @@ export default function Sidebar() {
           <button
             type="button"
             className={styles.manageBtn}
-            onClick={() => {
+            onClick={(e) => {
+              lastFocusRef.current = e.currentTarget;
               setRenameOpen(false);
               setMergeOpen((v) => !v);
               setMergeFrom(state.ui.category !== "All" ? state.ui.category : "");
@@ -210,7 +254,13 @@ export default function Sidebar() {
         </div>
 
         {renameOpen ? (
-          <form id="category-rename-panel" className={styles.managePanel} onSubmit={onSubmitRename}>
+          <form
+            id="category-rename-panel"
+            className={styles.managePanel}
+            onSubmit={onSubmitRename}
+            role="dialog"
+            aria-label="Rename category"
+          >
             <div className={styles.manageTitle}>Rename category</div>
             <div className={styles.manageGrid}>
               <label className={styles.srOnly} htmlFor="rename-from">
@@ -236,6 +286,7 @@ export default function Sidebar() {
               </label>
               <input
                 id="rename-to"
+                ref={renameToRef}
                 className={styles.inputSmall}
                 value={renameTo}
                 onChange={(e) => setRenameTo(e.target.value)}
@@ -245,7 +296,14 @@ export default function Sidebar() {
             </div>
 
             <div className={styles.manageActions}>
-              <button type="button" className={styles.linkBtn} onClick={() => setRenameOpen(false)}>
+              <button
+                type="button"
+                className={styles.linkBtn}
+                onClick={() => {
+                  setRenameOpen(false);
+                  window.setTimeout(() => lastFocusRef.current?.focus?.(), 0);
+                }}
+              >
                 Cancel
               </button>
               <button
@@ -260,7 +318,13 @@ export default function Sidebar() {
         ) : null}
 
         {mergeOpen ? (
-          <form id="category-merge-panel" className={styles.managePanel} onSubmit={onSubmitMerge}>
+          <form
+            id="category-merge-panel"
+            className={styles.managePanel}
+            onSubmit={onSubmitMerge}
+            role="dialog"
+            aria-label="Merge categories"
+          >
             <div className={styles.manageTitle}>Merge categories</div>
             <div className={styles.manageGrid}>
               <label className={styles.srOnly} htmlFor="merge-from">
@@ -268,6 +332,7 @@ export default function Sidebar() {
               </label>
               <select
                 id="merge-from"
+                ref={mergeFromRef}
                 className={styles.select}
                 value={mergeFrom}
                 onChange={(e) => setMergeFrom(e.target.value)}
@@ -303,7 +368,14 @@ export default function Sidebar() {
             </div>
 
             <div className={styles.manageActions}>
-              <button type="button" className={styles.linkBtn} onClick={() => setMergeOpen(false)}>
+              <button
+                type="button"
+                className={styles.linkBtn}
+                onClick={() => {
+                  setMergeOpen(false);
+                  window.setTimeout(() => lastFocusRef.current?.focus?.(), 0);
+                }}
+              >
                 Cancel
               </button>
               <button

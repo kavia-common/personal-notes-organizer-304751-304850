@@ -57,6 +57,12 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* keyboard focusable listbox */
+  border-radius: 14px;
+}
+
+.list:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
 .rowWrap {
@@ -67,6 +73,7 @@
   width: 100%;
   text-align: left;
   padding: 12px 12px;
+  min-height: 44px; /* touch target */
   border-radius: 16px;
   border: 1px solid rgba(17, 24, 39, 0.10);
   background: rgba(255, 255, 255, 0.78);

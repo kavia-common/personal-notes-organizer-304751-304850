@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import styles from "./NotesList.module.css";
 import { useNotes } from "../store/NotesStore";
 
@@ -11,12 +11,17 @@ function formatDate(iso) {
   }
 }
 
+function clamp(n, min, max) {
+  return Math.min(max, Math.max(min, n));
+}
+
 // PUBLIC_INTERFACE
 export default function NotesList() {
   /** List of notes, supports sorting, selecting, and quick actions. */
   const { state, derived, actions } = useNotes();
 
   const selectedId = state.selectedNoteId;
+  const listboxRef = useRef(null);
 
   const sortOptions = useMemo(
     () => [
@@ -27,6 +32,64 @@ export default function NotesList() {
     ],
     []
   );
+
+  // Ensure the active option remains visible when selection changes (mouse/keyboard/other actions).
+  useEffect(() => {
+    if (!selectedId) return;
+    const el = document.getElementById(`note-option-${selectedId}`);
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedId]);
+
+  const onListKeyDown = (e) => {
+    const ids = derived.visibleNoteIds || derived.visibleNotes.map((n) => n.id);
+    if (!ids.length) return;
+
+    const currentIndex = selectedId ? ids.indexOf(selectedId) : -1;
+
+    const moveToIndex = (nextIndex) => {
+      const idx = clamp(nextIndex, 0, ids.length - 1);
+      const nextId = ids[idx];
+      if (nextId) actions.selectNote(nextId);
+    };
+
+    switch (e.key) {
+      case "ArrowDown":
+      case "Down": {
+        e.preventDefault();
+        moveToIndex((currentIndex < 0 ? 0 : currentIndex) + 1);
+        break;
+      }
+      case "ArrowUp":
+      case "Up": {
+        e.preventDefault();
+        moveToIndex((currentIndex < 0 ? ids.length - 1 : currentIndex) - 1);
+        break;
+      }
+      case "Home": {
+        e.preventDefault();
+        moveToIndex(0);
+        break;
+      }
+      case "End": {
+        e.preventDefault();
+        moveToIndex(ids.length - 1);
+        break;
+      }
+      case "Enter": {
+        // Selection already means "open"; keep default button behavior elsewhere.
+        // Here, just ensure an item is selected.
+        if (!selectedId) {
+          e.preventDefault();
+          moveToIndex(0);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  };
 
   return (
     <section className={`${styles.card} ocean-surface`} aria-label="Notes list">
@@ -70,7 +133,15 @@ export default function NotesList() {
         </div>
       </div>
 
-      <div className={styles.list} role="list" aria-label="Notes results">
+      <div
+        ref={listboxRef}
+        className={styles.list}
+        role="listbox"
+        aria-label="Notes results"
+        aria-activedescendant={selectedId ? `note-option-${selectedId}` : undefined}
+        tabIndex={0}
+        onKeyDown={onListKeyDown}
+      >
         {derived.visibleNotes.length === 0 ? (
           <div className={styles.empty} role="status" aria-live="polite">
             <div className={styles.emptyTitle}>No notes match your filters.</div>
@@ -80,13 +151,15 @@ export default function NotesList() {
           derived.visibleNotes.map((n) => {
             const active = n.id === selectedId;
             return (
-              <div key={n.id} role="listitem" className={styles.rowWrap}>
+              <div key={n.id} className={styles.rowWrap}>
                 <button
+                  id={`note-option-${n.id}`}
                   type="button"
+                  role="option"
+                  aria-selected={active}
                   className={`${styles.item} ${active ? styles.active : ""}`}
                   onClick={() => actions.selectNote(n.id)}
                   aria-label={`Open note ${n.title || "Untitled"}`}
-                  aria-pressed={active}
                 >
                   <div className={styles.itemTop}>
                     <div className={styles.itemTitle}>{n.title || "Untitled"}</div>
@@ -94,7 +167,13 @@ export default function NotesList() {
                   </div>
                   <div className={styles.meta}>
                     <span className={styles.badge}>{n.category || "General"}</span>
-                    {n.isFavorite ? <span className={styles.star} aria-label="Favorite">★</span> : <span />}
+                    {n.isFavorite ? (
+                      <span className={styles.star} aria-label="Favorite">
+                        ★
+                      </span>
+                    ) : (
+                      <span aria-hidden="true" />
+                    )}
                   </div>
                 </button>
 
