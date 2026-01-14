@@ -1,12 +1,51 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer, useRef } from "react";
 import { buildDemoData, loadFromStorage, saveToStorage, storageAvailable } from "./storage";
 
+/**
+ * Formal note schema:
+ * {
+ *   id: string,
+ *   title: string,
+ *   category: string,
+ *   content: string,
+ *   isFavorite: boolean,
+ *   createdAt: string (ISO),
+ *   updatedAt: string (ISO)
+ * }
+ */
+
 function nowIso() {
   return new Date().toISOString();
 }
 
-function makeId() {
-  return `note_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+/**
+ * Deterministic 32-bit FNV-1a hash used to generate stable IDs for new notes.
+ * Not cryptographic; only used to reduce collisions and keep IDs repeatable for the same inputs.
+ */
+function fnv1a32(str) {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i += 1) {
+    hash ^= str.charCodeAt(i);
+    hash = (hash + (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24)) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function normalizeTextForId(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
+}
+
+function makeDeterministicNoteId({ title, category, content, createdAt }) {
+  const seed = `${normalizeTextForId(title)}\n${normalizeTextForId(category)}\n${normalizeTextForId(content)}\n${String(
+    createdAt || ""
+  )}`;
+  const hash = fnv1a32(seed).toString(16).padStart(8, "0");
+  // Add a short timestamp suffix to extremely reduce collisions when a user creates multiple identical notes quickly.
+  const suffix = (Date.now() & 0xfffff).toString(16).padStart(5, "0");
+  return `note_${hash}_${suffix}`;
 }
 
 const DEFAULT_STATE = {
@@ -19,13 +58,76 @@ const DEFAULT_STATE = {
   },
 };
 
+function isIsoDateString(value) {
+  if (typeof value !== "string") return false;
+  const t = Date.parse(value);
+  return Number.isFinite(t);
+}
+
+function coerceString(value, fallback) {
+  if (typeof value === "string") return value;
+  if (value == null) return fallback;
+  return String(value);
+}
+
+function normalizeNoteForRuntime(note) {
+  if (!note || typeof note !== "object") return null;
+
+  const createdAt = isIsoDateString(note.createdAt) ? note.createdAt : nowIso();
+  const updatedAt = isIsoDateString(note.updatedAt) ? note.updatedAt : createdAt;
+
+  const id = typeof note.id === "string" && note.id.trim() ? note.id.trim() : null;
+  return {
+    id,
+    title: coerceString(note.title, "Untitled"),
+    category: coerceString(note.category, "General"),
+    content: coerceString(note.content, ""),
+    isFavorite: Boolean(note.isFavorite),
+    createdAt,
+    updatedAt,
+  };
+}
+
 function normalizeState(maybe) {
   if (!maybe || typeof maybe !== "object") return null;
-  if (!Array.isArray(maybe.notes)) return null;
+  const notesRaw = Array.isArray(maybe.notes) ? maybe.notes : null;
+  if (!notesRaw) return null;
+
+  // Runtime normalization is a second line of defense on top of storage normalization.
+  const normalizedNotes = notesRaw
+    .map((n) => normalizeNoteForRuntime(n))
+    .filter(Boolean)
+    .map((n) => {
+      // If id is missing for some reason, create a deterministic one (migration should cover most cases).
+      const id = n.id || makeDeterministicNoteId({ ...n, createdAt: n.createdAt });
+      return { ...n, id };
+    });
+
+  // Dedupe by id (keep first)
+  const seen = new Set();
+  const notes = [];
+  for (const n of normalizedNotes) {
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    notes.push(n);
+  }
+
+  const ui = { ...DEFAULT_STATE.ui, ...(maybe.ui || {}) };
+  ui.category = coerceString(ui.category, DEFAULT_STATE.ui.category);
+  ui.search = coerceString(ui.search, DEFAULT_STATE.ui.search);
+  ui.sort = coerceString(ui.sort, DEFAULT_STATE.ui.sort);
+
+  const selectedNoteIdRaw =
+    typeof maybe.selectedNoteId === "string" && maybe.selectedNoteId.trim() ? maybe.selectedNoteId.trim() : null;
+
+  const selectedNoteId = selectedNoteIdRaw && notes.some((n) => n.id === selectedNoteIdRaw) ? selectedNoteIdRaw : null;
+
   return {
     ...DEFAULT_STATE,
     ...maybe,
-    ui: { ...DEFAULT_STATE.ui, ...(maybe.ui || {}) },
+    notes,
+    selectedNoteId,
+    ui,
   };
 }
 
@@ -105,8 +207,7 @@ function reducer(state, action) {
     }
     case "CREATE_NOTE": {
       const createdAt = nowIso();
-      const newNote = {
-        id: makeId(),
+      const base = {
         title: action.note.title || "Untitled",
         category: action.note.category || "General",
         content: action.note.content || "",
@@ -114,6 +215,14 @@ function reducer(state, action) {
         createdAt,
         updatedAt: createdAt,
       };
+
+      const id = makeDeterministicNoteId(base);
+
+      const newNote = {
+        id,
+        ...base,
+      };
+
       // If current filters hide the newly created note (e.g., category != General), we still select it.
       return {
         ...state,
@@ -124,10 +233,26 @@ function reducer(state, action) {
     case "UPDATE_NOTE": {
       const { id, patch } = action;
       const updatedAt = nowIso();
-      const next = {
-        ...state,
-        notes: state.notes.map((n) => (n.id === id ? { ...n, ...patch, updatedAt } : n)),
-      };
+
+      const nextNotes = state.notes.map((n) => {
+        if (n.id !== id) return n;
+
+        // Enforce schema + prevent accidental field deletion:
+        const normalized = normalizeNoteForRuntime({ ...n, ...patch, updatedAt }) || n;
+        return {
+          ...n,
+          ...patch,
+          // Ensure schema fields remain present and well-formed
+          title: normalized.title,
+          category: normalized.category,
+          content: normalized.content,
+          isFavorite: normalized.isFavorite,
+          createdAt: normalized.createdAt,
+          updatedAt: normalized.updatedAt,
+        };
+      });
+
+      const next = { ...state, notes: nextNotes };
       return ensureValidSelection(next);
     }
     case "DELETE_NOTE": {
@@ -167,7 +292,8 @@ export function NotesProvider({ children }) {
 
     // Seed demo data only when we can access storage and nothing exists yet.
     // If storage is blocked, we still seed demo data for usability, but it won't persist.
-    const initial = saved || { ...DEFAULT_STATE, ...buildDemoData() };
+    const initial = saved || normalizeState({ ...DEFAULT_STATE, ...buildDemoData() }) || { ...DEFAULT_STATE, ...buildDemoData() };
+
     dispatch({ type: "BOOTSTRAP", payload: initial });
     bootstrappedRef.current = true;
   }, []);
@@ -183,7 +309,25 @@ export function NotesProvider({ children }) {
     const visibleNotes = computeVisibleNotes(state);
     const selectedNote = state.notes.find((n) => n.id === state.selectedNoteId) || null;
 
-    return { categories, visibleNotes, selectedNote };
+    // Derived selectors for reuse by components (no component prop changes required).
+    const favorites = state.notes.filter((n) => n.isFavorite);
+    const favoriteIds = new Set(favorites.map((n) => n.id));
+    const visibleFavorites = visibleNotes.filter((n) => favoriteIds.has(n.id));
+
+    const noteById = new Map(state.notes.map((n) => [n.id, n]));
+    const visibleNoteIds = visibleNotes.map((n) => n.id);
+
+    return {
+      categories,
+      visibleNotes,
+      selectedNote,
+
+      // New derived selectors (safe additions; existing UI continues using visibleNotes/selectedNote/categories)
+      favorites,
+      visibleFavorites,
+      noteById,
+      visibleNoteIds,
+    };
   }, [state.notes, state.selectedNoteId, state.ui]);
 
   const actions = useMemo(() => {
