@@ -13,7 +13,7 @@ function formatDate(iso) {
 
 // PUBLIC_INTERFACE
 export default function NotesList() {
-  /** List of notes, supports sorting and selecting. */
+  /** List of notes, supports sorting, selecting, and quick actions. */
   const { state, derived, actions } = useNotes();
 
   const selectedId = state.selectedNoteId;
@@ -35,6 +35,7 @@ export default function NotesList() {
           <div className={styles.hTitle}>Notes</div>
           <div className="ocean-muted" style={{ fontSize: 12 }}>
             {derived.visibleNotes.length} visible
+            {state.ui.favoritesOnly ? " • favorites" : ""}
           </div>
         </div>
 
@@ -55,6 +56,17 @@ export default function NotesList() {
               </option>
             ))}
           </select>
+
+          <label className={styles.check} htmlFor="fav-first">
+            <input
+              id="fav-first"
+              type="checkbox"
+              checked={Boolean(state.ui.favoritesFirst)}
+              onChange={(e) => actions.setFavoritesFirst(e.target.checked)}
+              aria-label="Order favorites first"
+            />
+            <span>Fav first</span>
+          </label>
         </div>
       </div>
 
@@ -62,30 +74,45 @@ export default function NotesList() {
         {derived.visibleNotes.length === 0 ? (
           <div className={styles.empty} role="status" aria-live="polite">
             <div className={styles.emptyTitle}>No notes match your filters.</div>
-            <div className="ocean-muted">Try clearing search or selecting “All”.</div>
+            <div className="ocean-muted">Try clearing filters or selecting “All”.</div>
           </div>
         ) : (
           derived.visibleNotes.map((n) => {
             const active = n.id === selectedId;
             return (
-              <button
-                key={n.id}
-                type="button"
-                role="listitem"
-                className={`${styles.item} ${active ? styles.active : ""}`}
-                onClick={() => actions.selectNote(n.id)}
-                aria-label={`Open note ${n.title || "Untitled"}`}
-                aria-pressed={active}
-              >
-                <div className={styles.itemTop}>
-                  <div className={styles.itemTitle}>{n.title || "Untitled"}</div>
-                  <div className={styles.date}>{formatDate(n.updatedAt)}</div>
+              <div key={n.id} role="listitem" className={styles.rowWrap}>
+                <button
+                  type="button"
+                  className={`${styles.item} ${active ? styles.active : ""}`}
+                  onClick={() => actions.selectNote(n.id)}
+                  aria-label={`Open note ${n.title || "Untitled"}`}
+                  aria-pressed={active}
+                >
+                  <div className={styles.itemTop}>
+                    <div className={styles.itemTitle}>{n.title || "Untitled"}</div>
+                    <div className={styles.date}>{formatDate(n.updatedAt)}</div>
+                  </div>
+                  <div className={styles.meta}>
+                    <span className={styles.badge}>{n.category || "General"}</span>
+                    {n.isFavorite ? <span className={styles.star} aria-label="Favorite">★</span> : <span />}
+                  </div>
+                </button>
+
+                <div className={styles.quick} aria-label="Quick actions">
+                  <button
+                    type="button"
+                    className={styles.quickBtn}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      actions.duplicateNote(n.id);
+                    }}
+                    aria-label={`Duplicate note ${n.title || "Untitled"}`}
+                    title="Duplicate"
+                  >
+                    Duplicate
+                  </button>
                 </div>
-                <div className={styles.meta}>
-                  <span className={styles.badge}>{n.category || "General"}</span>
-                  {n.isFavorite ? <span className={styles.star} aria-label="Favorite">★</span> : <span />}
-                </div>
-              </button>
+              </div>
             );
           })
         )}

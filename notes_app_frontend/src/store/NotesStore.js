@@ -54,6 +54,8 @@ const DEFAULT_STATE = {
   ui: {
     category: "All",
     search: "",
+    favoritesOnly: false,
+    favoritesFirst: false,
     sort: "updated_desc", // updated_desc | updated_asc | title_asc | title_desc
   },
 };
@@ -116,6 +118,8 @@ function normalizeState(maybe) {
   ui.category = coerceString(ui.category, DEFAULT_STATE.ui.category);
   ui.search = coerceString(ui.search, DEFAULT_STATE.ui.search);
   ui.sort = coerceString(ui.sort, DEFAULT_STATE.ui.sort);
+  ui.favoritesOnly = Boolean(ui.favoritesOnly);
+  ui.favoritesFirst = Boolean(ui.favoritesFirst);
 
   const selectedNoteIdRaw =
     typeof maybe.selectedNoteId === "string" && maybe.selectedNoteId.trim() ? maybe.selectedNoteId.trim() : null;
@@ -149,31 +153,56 @@ function matchSearch(note, q) {
   );
 }
 
-function sortNotes(notes, sortKey) {
+function normalizeCategoryName(value) {
+  return String(value || "").trim();
+}
+
+function categoriesEqual(a, b) {
+  return normalizeCategoryName(a).toLowerCase() === normalizeCategoryName(b).toLowerCase();
+}
+
+function sortNotes(notes, sortKey, favoritesFirst) {
   const arr = [...notes];
   const byUpdated = (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
   const byTitle = (a, b) => (a.title || "").localeCompare(b.title || "");
 
+  // Base comparator derived from sort key
+  let cmp;
   switch (sortKey) {
     case "updated_asc":
-      return arr.sort((a, b) => -byUpdated(a, b));
+      cmp = (a, b) => -byUpdated(a, b);
+      break;
     case "title_asc":
-      return arr.sort(byTitle);
+      cmp = byTitle;
+      break;
     case "title_desc":
-      return arr.sort((a, b) => -byTitle(a, b));
+      cmp = (a, b) => -byTitle(a, b);
+      break;
     case "updated_desc":
     default:
-      return arr.sort(byUpdated);
+      cmp = byUpdated;
+      break;
   }
+
+  const favFirstCmp = (a, b) => {
+    if (!favoritesFirst) return 0;
+    const af = a.isFavorite ? 1 : 0;
+    const bf = b.isFavorite ? 1 : 0;
+    // favorites first => descending by flag
+    return bf - af;
+  };
+
+  return arr.sort((a, b) => favFirstCmp(a, b) || cmp(a, b));
 }
 
 function computeVisibleNotes(state) {
   const filtered = state.notes.filter((n) => {
     const catOk = state.ui.category === "All" ? true : n.category === state.ui.category;
     const qOk = matchSearch(n, state.ui.search);
-    return catOk && qOk;
+    const favOk = state.ui.favoritesOnly ? Boolean(n.isFavorite) : true;
+    return catOk && qOk && favOk;
   });
-  return sortNotes(filtered, state.ui.sort);
+  return sortNotes(filtered, state.ui.sort, state.ui.favoritesFirst);
 }
 
 function ensureValidSelection(state) {
@@ -199,6 +228,23 @@ function reducer(state, action) {
     }
     case "SET_SORT": {
       return ensureValidSelection({ ...state, ui: { ...state.ui, sort: action.sort } });
+    }
+    case "SET_FAVORITES_ONLY": {
+      return ensureValidSelection({ ...state, ui: { ...state.ui, favoritesOnly: Boolean(action.value) } });
+    }
+    case "SET_FAVORITES_FIRST": {
+      return ensureValidSelection({ ...state, ui: { ...state.ui, favoritesFirst: Boolean(action.value) } });
+    }
+    case "CLEAR_FILTERS": {
+      return ensureValidSelection({
+        ...state,
+        ui: {
+          ...state.ui,
+          category: "All",
+          search: "",
+          favoritesOnly: false,
+        },
+      });
     }
     case "SELECT_NOTE": {
       // Guard against selecting stale ids.
@@ -230,6 +276,29 @@ function reducer(state, action) {
         selectedNoteId: newNote.id,
       };
     }
+    case "DUPLICATE_NOTE": {
+      const source = state.notes.find((n) => n.id === action.id);
+      if (!source) return state;
+
+      const createdAt = nowIso();
+      const base = {
+        title: `${source.title || "Untitled"} (copy)`,
+        category: source.category || "General",
+        content: source.content || "",
+        isFavorite: Boolean(source.isFavorite),
+        createdAt,
+        updatedAt: createdAt,
+      };
+
+      const id = makeDeterministicNoteId(base);
+      const newNote = { id, ...base };
+
+      return {
+        ...state,
+        notes: [newNote, ...state.notes],
+        selectedNoteId: newNote.id,
+      };
+    }
     case "UPDATE_NOTE": {
       const { id, patch } = action;
       const updatedAt = nowIso();
@@ -254,6 +323,40 @@ function reducer(state, action) {
 
       const next = { ...state, notes: nextNotes };
       return ensureValidSelection(next);
+    }
+    case "RENAME_CATEGORY": {
+      const from = normalizeCategoryName(action.from);
+      const to = normalizeCategoryName(action.to);
+
+      if (!from || !to) return state;
+      if (categoriesEqual(from, to)) return state;
+
+      const nextNotes = state.notes.map((n) => {
+        if (!categoriesEqual(n.category, from)) return n;
+        return { ...n, category: to, updatedAt: nowIso() };
+      });
+
+      const nextUiCategory =
+        state.ui.category !== "All" && categoriesEqual(state.ui.category, from) ? to : state.ui.category;
+
+      return ensureValidSelection({ ...state, notes: nextNotes, ui: { ...state.ui, category: nextUiCategory } });
+    }
+    case "MERGE_CATEGORIES": {
+      const from = normalizeCategoryName(action.from);
+      const into = normalizeCategoryName(action.into);
+
+      if (!from || !into) return state;
+      if (categoriesEqual(from, into)) return state;
+
+      const nextNotes = state.notes.map((n) => {
+        if (!categoriesEqual(n.category, from)) return n;
+        return { ...n, category: into, updatedAt: nowIso() };
+      });
+
+      const nextUiCategory =
+        state.ui.category !== "All" && categoriesEqual(state.ui.category, from) ? into : state.ui.category;
+
+      return ensureValidSelection({ ...state, notes: nextNotes, ui: { ...state.ui, category: nextUiCategory } });
     }
     case "DELETE_NOTE": {
       const id = action.id;
@@ -338,6 +441,11 @@ export function NotesProvider({ children }) {
         dispatch({ type: "CREATE_NOTE", note });
       },
       // PUBLIC_INTERFACE
+      duplicateNote(id) {
+        /** Duplicates a note by id and selects the new copy. */
+        dispatch({ type: "DUPLICATE_NOTE", id });
+      },
+      // PUBLIC_INTERFACE
       updateNote(id, patch) {
         /** Updates a note by id. */
         dispatch({ type: "UPDATE_NOTE", id, patch });
@@ -366,6 +474,31 @@ export function NotesProvider({ children }) {
       setSort(sort) {
         /** Sets the notes sort option. */
         dispatch({ type: "SET_SORT", sort });
+      },
+      // PUBLIC_INTERFACE
+      setFavoritesOnly(value) {
+        /** Sets whether list is filtered to favorites only. */
+        dispatch({ type: "SET_FAVORITES_ONLY", value });
+      },
+      // PUBLIC_INTERFACE
+      setFavoritesFirst(value) {
+        /** Sets whether sorting is grouped by favorites first. */
+        dispatch({ type: "SET_FAVORITES_FIRST", value });
+      },
+      // PUBLIC_INTERFACE
+      clearFilters() {
+        /** Clears all active filters (search, category, favorites-only). */
+        dispatch({ type: "CLEAR_FILTERS" });
+      },
+      // PUBLIC_INTERFACE
+      renameCategory(from, to) {
+        /** Renames a category, updating all notes that use it. */
+        dispatch({ type: "RENAME_CATEGORY", from, to });
+      },
+      // PUBLIC_INTERFACE
+      mergeCategories(from, into) {
+        /** Merges one category into another by reassigning notes. */
+        dispatch({ type: "MERGE_CATEGORIES", from, into });
       },
     };
   }, []);

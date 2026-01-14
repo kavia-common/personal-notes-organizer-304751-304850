@@ -48,6 +48,17 @@ export default function TopNav() {
             New note
           </button>
 
+          <button
+            className={`ocean-btn ${styles.dupBtn}`}
+            type="button"
+            onClick={() => state.selectedNoteId && actions.duplicateNote(state.selectedNoteId)}
+            aria-label="Duplicate selected note"
+            disabled={!state.selectedNoteId}
+            title={state.selectedNoteId ? "Duplicate selected note" : "Select a note to duplicate"}
+          >
+            Duplicate
+          </button>
+
           <div className={styles.hint} aria-label="Keyboard shortcut hint">
             <span className="ocean-muted">Tip:</span> <span className="ocean-kbd">Ctrl</span>+
             <span className="ocean-kbd">K</span> to focus search
