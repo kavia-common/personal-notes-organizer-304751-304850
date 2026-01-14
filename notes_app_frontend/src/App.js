@@ -1,48 +1,37 @@
-import React, { useState, useEffect } from 'react';
-import logo from './logo.svg';
-import './App.css';
+import React from "react";
+import "./theme.css";
+import styles from "./App.module.css";
+import { NotesProvider } from "./store/NotesStore";
+import TopNav from "./components/TopNav";
+import Sidebar from "./components/Sidebar";
+import NotesList from "./components/NotesList";
+import NoteEditor from "./components/NoteEditor";
 
 // PUBLIC_INTERFACE
 function App() {
-  const [theme, setTheme] = useState('light');
-
-  // Effect to apply theme to document element
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme);
-  }, [theme]);
-
-  // PUBLIC_INTERFACE
-  const toggleTheme = () => {
-    setTheme(prevTheme => prevTheme === 'light' ? 'dark' : 'light');
-  };
-
+  /** Main app entry for the personal notes organizer UI. */
   return (
-    <div className="App">
-      <header className="App-header">
-        <button 
-          className="theme-toggle" 
-          onClick={toggleTheme}
-          aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
-        >
-          {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
-        </button>
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <p>
-          Current theme: <strong>{theme}</strong>
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <NotesProvider>
+      <div className={`ocean-app ${styles.shell}`}>
+        <div className={styles.top}>
+          <TopNav />
+        </div>
+
+        <main className={styles.body} aria-label="Notes application">
+          <div className={`${styles.sidebar} ${styles.panel}`} aria-label="Category sidebar">
+            <Sidebar />
+          </div>
+
+          <div className={`${styles.list} ${styles.panel}`} aria-label="Notes panel">
+            <NotesList />
+          </div>
+
+          <div className={`${styles.editor} ${styles.panel}`} aria-label="Editor panel">
+            <NoteEditor />
+          </div>
+        </main>
+      </div>
+    </NotesProvider>
   );
 }
 

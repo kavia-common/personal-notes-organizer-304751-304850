@@ -1,0 +1,142 @@
+/* Ocean Professional theme tokens + global primitives */
+
+:root {
+  --ocean-primary: #2563eb;
+  --ocean-secondary: #f59e0b;
+  --ocean-success: #f59e0b;
+  --ocean-error: #ef4444;
+
+  --ocean-bg: #f9fafb;
+  --ocean-surface: #ffffff;
+  --ocean-text: #111827;
+  --ocean-muted: #6b7280;
+
+  --ocean-border: rgba(17, 24, 39, 0.10);
+  --ocean-shadow: 0 10px 24px rgba(17, 24, 39, 0.08);
+  --ocean-shadow-sm: 0 6px 14px rgba(17, 24, 39, 0.08);
+
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 10px;
+
+  --transition-fast: 160ms ease;
+  --transition: 220ms ease;
+
+  --focus-ring: 0 0 0 4px rgba(37, 99, 235, 0.18);
+
+  --font-sans: "Inter", system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+    "Segoe UI Emoji";
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.10), #f9fafb 55%);
+  color: var(--ocean-text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 10px;
+}
+
+.ocean-app {
+  min-height: 100vh;
+  background: transparent;
+}
+
+.ocean-surface {
+  background: var(--ocean-surface);
+  border: 1px solid var(--ocean-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--ocean-shadow-sm);
+}
+
+.ocean-btn {
+  appearance: none;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: var(--ocean-surface);
+  color: var(--ocean-text);
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+}
+
+.ocean-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(17, 24, 39, 0.10);
+}
+
+.ocean-btn:active {
+  transform: translateY(0px);
+}
+
+.ocean-btnPrimary {
+  border: 1px solid rgba(37, 99, 235, 0.22);
+  background: linear-gradient(180deg, rgba(37, 99, 235, 0.95), rgba(37, 99, 235, 0.85));
+  color: white;
+}
+
+.ocean-btnDanger {
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.95), rgba(239, 68, 68, 0.85));
+  color: white;
+}
+
+.ocean-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(255, 255, 255, 0.70);
+  backdrop-filter: blur(10px);
+}
+
+.ocean-input {
+  width: 100%;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--ocean-text);
+  background: rgba(255, 255, 255, 0.85);
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
+}
+
+.ocean-input:focus {
+  outline: none;
+  border-color: rgba(37, 99, 235, 0.45);
+  box-shadow: var(--focus-ring);
+}
+
+.ocean-muted {
+  color: var(--ocean-muted);
+}
+
+.ocean-kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  border: 1px solid rgba(17, 24, 39, 0.14);
+  background: rgba(255, 255, 255, 0.8);
+  padding: 2px 6px;
+  border-radius: 8px;
+}

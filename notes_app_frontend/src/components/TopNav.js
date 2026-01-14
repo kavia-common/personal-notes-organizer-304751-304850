@@ -1,0 +1,59 @@
+import React, { useMemo } from "react";
+import styles from "./TopNav.module.css";
+import { useNotes } from "../store/NotesStore";
+import { getApiBaseUrl } from "../api/client";
+
+// PUBLIC_INTERFACE
+export default function TopNav() {
+  /** Top navigation bar with app title and global actions. */
+  const { state, derived, actions } = useNotes();
+  const apiBase = getApiBaseUrl();
+
+  const stats = useMemo(() => {
+    const total = state.notes.length;
+    const visible = derived.visibleNotes.length;
+    return { total, visible };
+  }, [state.notes.length, derived.visibleNotes.length]);
+
+  return (
+    <div className={styles.wrap} role="banner" aria-label="Top navigation">
+      <div className={styles.inner}>
+        <div className={styles.brand}>
+          <div className={styles.logo} aria-hidden="true">
+            N
+          </div>
+          <div>
+            <div className={styles.title}>Ocean Notes</div>
+            <div className={styles.sub}>
+              <span className="ocean-muted">
+                {stats.visible}/{stats.total} notes
+              </span>
+              <span className={styles.dot} aria-hidden="true" />
+              <span className="ocean-muted">
+                {apiBase ? `API: ${apiBase}` : "Offline mode"}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className={styles.actions}>
+          <button
+            className={`ocean-btn ${styles.newBtn}`}
+            onClick={() => actions.createNote({ title: "Untitled", category: "General", content: "" })}
+            aria-label="Create a new note"
+          >
+            <span className={styles.plus} aria-hidden="true">
+              +
+            </span>
+            New note
+          </button>
+
+          <div className={styles.hint} aria-label="Keyboard shortcut hint">
+            <span className="ocean-muted">Tip:</span> <span className="ocean-kbd">Ctrl</span>+
+            <span className="ocean-kbd">K</span> to focus search
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
